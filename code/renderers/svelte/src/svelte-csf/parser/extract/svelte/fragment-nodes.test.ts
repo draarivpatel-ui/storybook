@@ -64,6 +64,36 @@ describe(extractFragmentNodes.name, () => {
     }
   });
 
+  it("takes only the HTML comment directly before a '<Story />' component", async () => {
+    const ast = getSvelteAST({
+      code: `
+        <script module>
+          import { defineMeta } from "@storybook/svelte"
+          const { Story } = defineMeta();
+        </script>
+        <!-- Above a snippet -->
+        {#snippet template()}<span />{/snippet}
+        <Story name="1" />
+        <div><!-- Inside an element --></div>
+        <Story name="2" />
+        <!-- Above a story -->
+
+        <Story name="3" />
+      `,
+    });
+    const moduleNodes = await extractModuleNodes({ module: ast.module });
+    const fragmentNodes = await extractFragmentNodes({
+      fragment: ast.fragment,
+      moduleNodes,
+    });
+
+    expect(fragmentNodes.storyComponents.map((story) => story.comment?.data)).toEqual([
+      undefined,
+      undefined,
+      ' Above a story ',
+    ]);
+  });
+
   it('extracts the snippet blocks at the root of the fragment', async () => {
     const ast = getSvelteAST({
       code: `
