@@ -6,7 +6,6 @@ import { Location, Route } from 'storybook/internal/router';
 import type { Addon_PageType } from 'storybook/internal/types';
 import { Addon_TypesEnum } from 'storybook/internal/types';
 
-import { global } from '@storybook/global';
 import { CloseIcon } from '@storybook/icons';
 
 import { types, useStorybookApi, useStorybookState } from 'storybook/manager-api';
@@ -19,7 +18,7 @@ import { GuidePage } from './GuidePage.tsx';
 import { ShortcutsPage } from './ShortcutsPage.tsx';
 import { WhatsNewPage } from './whats_new_page.tsx';
 
-const { document } = global;
+const { document } = globalThis;
 
 const Content = styled(ScrollArea)(({ theme }) => ({
   background: theme.background.content,
@@ -82,8 +81,8 @@ const Pages: FC<{
     ];
 
     if (
-      global.CONFIG_TYPE === 'DEVELOPMENT' &&
-      global.FEATURES?.menuOnboardingChecklist !== false
+      globalThis.CONFIG_TYPE === 'DEVELOPMENT' &&
+      globalThis.FEATURES?.menuOnboardingChecklist !== false
     ) {
       tabsToInclude.push({
         id: 'guide',

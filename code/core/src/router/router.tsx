@@ -1,8 +1,6 @@
 import type { ComponentProps, ReactElement, ReactNode } from 'react';
 import React, { useCallback } from 'react';
 
-import { global } from '@storybook/global';
-
 import * as R from 'react-router-dom';
 
 import { NAVIGATE_URL } from 'storybook/internal/core-events';
@@ -10,7 +8,7 @@ import { addons } from 'storybook/manager-api';
 import type { LinkProps, NavigateOptions, RenderData } from './types.ts';
 import { getMatch, parsePath, queryFromLocation } from './utils.ts';
 
-const { document } = global;
+const { document } = globalThis;
 
 interface MatchingData {
   match: null | { path: string };

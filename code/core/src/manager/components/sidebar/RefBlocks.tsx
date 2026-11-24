@@ -10,7 +10,6 @@ import {
   Spaced,
 } from 'storybook/internal/components';
 
-import { global } from '@storybook/global';
 import { ChevronDownIcon, LockIcon, SweepIcon, SyncIcon } from '@storybook/icons';
 
 import { useStorybookApi } from 'storybook/manager-api';
@@ -20,7 +19,7 @@ import { useLayout } from '../layout/LayoutProvider.tsx';
 import { Contained, Loader } from './Loader.tsx';
 import { NoResults } from './NoResults.tsx';
 
-const { window: globalWindow } = global;
+const { window: globalWindow } = globalThis;
 
 const TextStyle = styled.div(({ theme }) => ({
   fontSize: theme.typography.size.s2,

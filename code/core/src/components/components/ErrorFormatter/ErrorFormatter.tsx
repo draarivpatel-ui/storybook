@@ -1,10 +1,8 @@
 import React, { Fragment } from 'react';
 
-import { global } from '@storybook/global';
-
 import { styled } from 'storybook/theming/emotion';
 
-const { document } = global;
+const { document } = globalThis;
 
 const ErrorName = styled.strong(({ theme }) => ({
   color: theme.color.orange,

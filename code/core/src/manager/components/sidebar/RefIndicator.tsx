@@ -3,7 +3,6 @@ import React, { forwardRef, useCallback, useMemo } from 'react';
 
 import { Button, PopoverProvider, Select, Spaced } from 'storybook/internal/components';
 
-import { global } from '@storybook/global';
 import {
   AlertIcon,
   DocumentIcon,
@@ -22,7 +21,7 @@ import type { getStateType } from '../../utils/tree.ts';
 import { useLayout } from '../layout/LayoutProvider.tsx';
 import type { RefType } from './types.ts';
 
-const { document, window: globalWindow } = global;
+const { document, window: globalWindow } = globalThis;
 
 export type ClickHandler = MenuItem['onClick'];
 export interface IndicatorIconProps {
