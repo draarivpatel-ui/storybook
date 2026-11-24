@@ -482,6 +482,338 @@ export const Primary = { args: { onSelect: (index: number) => console.log(lines[
     expect(story?.warning).toBeUndefined();
   });
 
+  it('binds an arg written as the name of a constant another arg reads to that constant', async () => {
+    const story = await viewerStory(`
+const items = ['a', 'b'];
+export const Primary = { args: { lines: items, selectedLines: [items[0]] } };
+`);
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+
+      const items = ['a', 'b'];
+
+      const selectedLines = [items[0]];
+      </script>
+
+      <template>
+        <MyButton :lines="items" :selectedLines="selectedLines" />
+      </template>"
+    `);
+    expect(story?.warning).toBeUndefined();
+    expect(
+      fillTemplate(
+        story!.template! as SnippetTemplate<VueHolePlace>,
+        {
+          initialArgs: { lines: ['a', 'b'], selectedLines: ['a'] },
+          unmappedArgs: { lines: ['c'], selectedLines: ['a'] },
+        },
+        printHole
+      )
+    ).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+
+      const items = ['a', 'b'];
+
+      const selectedLines = [items[0]];
+      </script>
+
+      <template>
+        <MyButton :lines="['c']" :selectedLines="selectedLines" />
+      </template>"
+    `);
+  });
+
+  it('keeps a constant read in a story play function', async () => {
+    const story = await viewerStory(`
+const lines = ['a', 'b', 'c'];
+export const Primary = {
+  args: { lines: lines.length },
+  play: async ({ canvas }) => {
+    await canvas.findByText(lines[0]);
+    await expect(lines).toHaveLength(3);
+  },
+};
+`);
+    expect(story?.snippet).toContain(`const lines = ['a', 'b', 'c'];`);
+    expect(story?.warning).toBeUndefined();
+  });
+
+  it.each([
+    ['a method called on it', `const lines = ['a'];\nlines.push('b');`],
+    ['a member assigned', `const lines = ['a'];\nlines[1] = 'b';`],
+    ['a member deleted', `const lines = ['a', 'b'];\ndelete lines[1];`],
+    ['a call it is passed to', `const lines = ['a'];\nObject.assign(lines, ['b']);`],
+    [
+      'a function that changes it',
+      `const lines = ['a'];\nconst grow = () => {\n  lines.length += 1;\n};\ngrow();`,
+    ],
+    ['a method whose result is kept', `const lines = ['a'];\nconst total = lines.push('b');`],
+    ['a method that reorders it', `const lines = ['b', 'a'];\nconst sorted = lines.sort();`],
+    ['another name for it', `const lines = ['a'];\nconst alias = lines;\nalias.push('b');`],
+    [
+      'a call whose result is kept',
+      `const lines = ['a'];\nconst merged = Object.assign(lines, ['b']);`,
+    ],
+    ['a sequence', `const lines = ['a'];\nconst total = (lines.push('b'), lines.length);`],
+    [
+      'a function it is handed to',
+      `const lines = ['a'];\nfunction fill(list) {\n  list.push('z');\n}\nfunction init() {\n  fill(lines);\n}\ninit();`,
+    ],
+    [
+      'a function that returns it',
+      `const lines = ['a'];\nconst getLines = () => lines;\ngetLines().push('b');`,
+    ],
+    [
+      'a destructuring assignment',
+      `const lines = ['a', 'b'];\n[lines[0], lines[1]] = [lines[1], lines[0]];`,
+    ],
+    ['a loop that assigns a member', `const lines = ['a'];\nfor (lines[0] of ['z']) {\n}`],
+    [
+      'a template tag',
+      `const lines = ['a'];\nconst tag = (strings, list) => list.push('b');\nconst out = tag\`\${lines}\`;`,
+    ],
+    [
+      'an object it is handed over in',
+      `const lines = ['a'];\nconst grow = (config) => config.args.push('b');\ngrow({ args: lines });`,
+    ],
+    [
+      'the args of a story that holds it',
+      `const lines = ['a'];\nexport const Other = { args: { lines } };\nOther.args.lines.push('b');`,
+    ],
+  ])('names an arg that reads a constant the story file changes with %s', async (_how, source) => {
+    const story = await viewerStory(`
+${source}
+export const Primary = { args: { html: 'Hi', lines: lines.length } };
+`);
+    expect(story?.snippet).not.toContain('lines');
+    expect(story?.warning).toBe(
+      'Incomplete snippet: `lines: lines.length`, `lines` could not be resolved statically.'
+    );
+  });
+
+  it('names an arg that changes the constant another arg reads', async () => {
+    const story = await viewerStory(`
+const lines = ['c', 'b', 'a'];
+export const Primary = { args: { html: lines[0], selectedLines: lines.sort() } };
+`);
+    expect(story?.snippet).toBeUndefined();
+    expect(story?.warning).toBe(
+      'No static snippet: `html: lines[0]`, `selectedLines: lines.sort()`, `lines` could not be resolved statically.'
+    );
+  });
+
+  it.each([
+    ['reads its members', `const first = lines[0];\nconst count = lines.length;`],
+    ['calls methods that read it', `const text = lines.map((line) => line.trim()).join(', ');`],
+    ['copies it', `const copy = [...lines];\ncopy.push('d');\nconst set = new Set(lines);`],
+    ['hands it to the args of another story', `export const Other = { args: { lines } };`],
+    [
+      'hands it to the argTypes of a typed meta',
+      `const typed = { argTypes: { lines: { options: lines } } } satisfies object;\ntype Typed = typeof typed;\nexport { typed };`,
+    ],
+    ['names it in a type', `type Line = (typeof lines)[number];`],
+    ['logs it', `console.log(lines);`],
+  ])('declares a constant the story file only %s', async (_how, source) => {
+    const story = await viewerStory(`
+const lines = ['a', 'b'] as const;
+${source}
+export const Primary = { args: { selectedLines: [lines[0]] } };
+`);
+    expect(story?.snippet).toContain(`const lines = ['a', 'b'] as const;`);
+    expect(story?.warning).toBeUndefined();
+  });
+
+  it.each([
+    ['holds objects', `const lines = [{ id: 1 }];`, 'lines[0]'],
+    ['is built by a call', `const lines = new Map([['a', 1]]);`, 'lines.size'],
+    ['is declared with var', `var lines = ['a'];`, 'lines.length'],
+  ])('names an arg that reads a constant that %s', async (_how, source, read) => {
+    const story = await viewerStory(`
+${source}
+export const Primary = { args: { html: 'Hi', selectedLines: ${read} } };
+`);
+    expect(story?.snippet).not.toContain('lines');
+    expect(story?.warning).toBe(
+      `Incomplete snippet: \`selectedLines: ${read}\`, \`lines\` could not be resolved statically.`
+    );
+  });
+
+  it('declares a constant of the story file a value reads under the name of a global', async () => {
+    const story = await viewerStory(`
+const Number = (value) => 42;
+const lines = ['a', 'b'];
+export const Primary = { args: { lines: Number(lines.length) } };
+`);
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+
+      const Number = (value) => 42;
+
+      const lines = ['a', 'b'];
+
+      const lines2 = Number(lines.length);
+      </script>
+
+      <template>
+        <MyButton :lines="lines2" />
+      </template>"
+    `);
+    expect(story?.warning).toBeUndefined();
+  });
+
+  it('names an arg that reads a constant, or is itself, written with a type of the story file', async () => {
+    const story = await viewerStory(`
+interface Item { name: string }
+const items = [] as Item[];
+const format = (item: Item): string => item.name;
+const sizes = { large: 'L' } as const;
+export const Primary = {
+  args: {
+    lines: items.length,
+    html: format({ name: 'x' }),
+    selectedLines: [sizes.large as unknown as Item],
+  },
+};
+`);
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+
+      const items = [];
+
+      const lines = items.length;
+      </script>
+
+      <template>
+        <MyButton :lines="lines" />
+      </template>"
+    `);
+    expect(story?.warning).toBe(
+      "Incomplete snippet: `html: format({ name: 'x' })`, `selectedLines: [sizes.large as unknown as Item]`, `format`, `sizes` could not be resolved statically."
+    );
+  });
+
+  it('names an arg another module reads its own constant with, whatever the story file calls its own', async () => {
+    const story = await primaryStory(
+      `
+import { sharedArgs } from './shared';
+const lines = ['story'];
+export const Primary = { args: { ...sharedArgs, html: lines.join('') } };
+`,
+      {
+        './shared': `
+const lines = ['x', 'y'];
+export const sharedArgs = { lines: lines.length, onSelect: (index) => lines[index] };
+`,
+      },
+      { ...VIEWER_CATEGORIES, select: 'events' }
+    );
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+
+      const lines = ['story'];
+
+      const html = lines.join('');
+      </script>
+
+      <template>
+        <MyButton :html="html" />
+      </template>"
+    `);
+    expect(story?.warning).toBe(
+      'Incomplete snippet: `lines: lines.length`, `onSelect: (index) => lines[index]` could not be resolved statically.'
+    );
+  });
+
+  it('declares no constant named as the Vue import a v-model needs', async () => {
+    const story = await primaryStory(
+      `
+const ref = { current: 1 };
+export const Primary = { args: { lines: ref.current, modelValue: 'x' } };
+`,
+      undefined,
+      { lines: 'props', modelValue: 'props', 'update:modelValue': 'events' }
+    );
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import { ref } from "vue";
+      import MyButton from './MyButton.vue';
+
+      const modelValue = ref('x');
+      </script>
+
+      <template>
+        <MyButton v-model="modelValue" />
+      </template>"
+    `);
+    expect(story?.warning).toBe(
+      'Incomplete snippet: `lines: ref.current`, `ref` could not be resolved statically.'
+    );
+  });
+
+  it('names a listener that reads a constant where the snippet cannot follow it', async () => {
+    const story = await primaryStory(
+      `
+const lines = ['a', 'b', 'c'];
+export const Primary = {
+  args: { html: 'Hi', onSelect: (index = lines.length) => index },
+};
+`,
+      undefined,
+      { html: 'props', select: 'events' }
+    );
+    expect(story?.snippet).toMatchInlineSnapshot(`
+      "<script lang="ts" setup>
+      import MyButton from './MyButton.vue';
+      </script>
+
+      <template>
+        <MyButton html="Hi" />
+      </template>"
+    `);
+    expect(story?.warning).toBe(
+      'Incomplete snippet: `onSelect: (index = lines.length) => index`, `lines` could not be resolved statically.'
+    );
+  });
+
+  it.each([
+    [
+      'its setup',
+      `setup() {\n      const lines = ref(0);\n      return { args, lines };\n    }`,
+      '<MyButton v-bind="args" :active="lines" />',
+    ],
+    [
+      'a scope of its template',
+      `setup: () => ({ args })`,
+      '<MyButton v-for="lines in 2" :key="lines" v-bind="args" />',
+    ],
+  ])(
+    'names an arg that reads a constant where the render declares its name in %s',
+    async (_where, setup, template) => {
+      const story = await primaryStory(`
+import { ref } from 'vue';
+const lines = ['a', 'b', 'c'];
+export const Primary = {
+  args: { count: lines.length, label: 'Hi' },
+  render: (args) => ({
+    components: { MyButton },
+    ${setup},
+    template: '${template}',
+  }),
+};
+`);
+      expect(story?.snippet).toContain('label="Hi"');
+      expect(story?.snippet).not.toContain("['a', 'b', 'c']");
+      expect(story?.warning).toBe(
+        'Incomplete snippet: `count: lines.length`, `lines` could not be resolved statically.'
+      );
+    }
+  );
+
   it('renders as the story does', async () => {
     const story = await primaryStory(
       `

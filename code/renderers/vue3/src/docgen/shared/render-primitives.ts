@@ -23,7 +23,7 @@ import {
   wrapSlotContent,
 } from '../../snippet-values.ts';
 import { printValue, snippetValueOf } from './classify-value.ts';
-import { type StoryConstants, referencedNames } from './story-constants.ts';
+import { type StoryConstants, NO_STORY_CONSTANTS } from './story-constants.ts';
 
 export interface RenderSfcMarkupInput {
   /** Rendered Vue template markup without the wrapping `<template>` block. */
@@ -49,6 +49,8 @@ export interface RenderContext {
   constants: StoryConstants;
   /** Names of the story-file constants `<script setup>` declares ahead of the hoisted consts. */
   declaredConstants: Set<string>;
+  /** Story-file constants whose name the render gives to something else, so none can be declared. */
+  shadowedConstants: Set<string>;
   /** Value-identical arg hoists already declared in `<script setup>`. */
   hoistedArgs: Map<string, { binding: string; source: string }>;
   /** Import statements for components the rendered markup references. */
@@ -98,17 +100,18 @@ function partitionArgsByRole(args: ClassifiedArg[]): {
 // Create an isolated hoist context for one generated snippet, or with `mark` for its template.
 export function createRenderContext(
   mark?: HoleMarks<VueHolePlace>['mark'],
-  constants: StoryConstants = new Map()
+  constants: StoryConstants = NO_STORY_CONSTANTS
 ): RenderContext {
   return {
     imports: {},
     // `ref` is reserved up front so no hoisted arg can shadow the Vue import a v-model may need.
     // So are the story-file constants: an arg named like the constant its value reads, as in
     // `lines: lines.length`, then hoists under another name.
-    bindings: new Set(['ref', ...constants.keys()]),
+    bindings: new Set(['ref', ...constants.names]),
     variables: new Map(),
     constants,
     declaredConstants: new Set(),
+    shadowedConstants: new Set(),
     hoistedArgs: new Map(),
     componentImports: new Set(),
     statements: [],
@@ -131,27 +134,58 @@ export const attributeHole = (name: string, arg: string): HoleRef<VueHolePlace> 
   ...(name !== arg && { name }),
 });
 
-// An arg's value as code in `<script setup>`, which declares the story-file constants it reads.
+// An arg's value as code in `<script setup>`.
 export function scriptValue(name: string, value: Node, ctx: RenderContext): string {
-  const unwrapped = unwrapExpression(value);
-  declareConstantsOf(unwrapped, ctx);
-  return marked(ctx, { kind: 'value', in: 'script', arg: name }, printValue(unwrapped));
+  return marked(ctx, { kind: 'value', in: 'script', arg: name }, scriptCode(value, ctx));
 }
 
-// Declares the story-file constants a value reads, and those they read in turn.
-function declareConstantsOf(value: Node, ctx: RenderContext): void {
-  if (ctx.constants.size === 0) {
-    return;
+// A value as the code `<script setup>` holds it with, which declares the story-file constants that
+// code reads. A value a constant is declared with is that constant's name, so it stays the one
+// value every other read of the constant sees.
+function scriptCode(value: Node, ctx: RenderContext): string {
+  const unwrapped = unwrapExpression(value);
+  const constant = declaredConstantOf(unwrapped, ctx);
+  if (constant !== undefined) {
+    return constant;
   }
-  const declare = (name: string): void => {
-    const constant = ctx.constants.get(name);
-    if (constant && !ctx.declaredConstants.has(name)) {
-      ctx.declaredConstants.add(name);
-      constant.uses.forEach(declare);
-    }
-  };
-  referencedNames(value)?.forEach(declare);
+  ctx.constants.readBy(unwrapped).forEach((name) => declareConstant(name, ctx));
+  return printValue(unwrapped);
 }
+
+// The story-file constant a value is declared as, which the snippet then declares.
+function declaredConstantOf(value: Node, ctx: RenderContext): string | undefined {
+  const constant = ctx.constants.declaredAs(value);
+  if (constant !== undefined) {
+    declareConstant(constant, ctx);
+  }
+  return constant;
+}
+
+// Declares a story-file constant, and those it reads in turn.
+function declareConstant(name: string, ctx: RenderContext): void {
+  const constant = ctx.constants.declarations.get(name);
+  if (constant && !ctx.declaredConstants.has(name)) {
+    ctx.declaredConstants.add(name);
+    constant.uses.forEach((used) => declareConstant(used, ctx));
+  }
+}
+
+/**
+ * Takes names the render declares itself, in its `setup` or its template. A story-file constant
+ * of the same name then has no place to be declared in; see `shadowedDeclarations`.
+ */
+export function reserveBindings(names: Iterable<string>, ctx: RenderContext): void {
+  for (const name of names) {
+    ctx.bindings.add(name);
+    if (ctx.constants.names.has(name)) {
+      ctx.shadowedConstants.add(name);
+    }
+  }
+}
+
+/** The story-file constants the snippet declares under a name its render already uses. */
+export const shadowedDeclarations = (ctx: RenderContext): string[] =>
+  [...ctx.declaredConstants].filter((name) => ctx.shadowedConstants.has(name));
 
 /** Wrap prepared template markup with the shared SFC block assembly. */
 export function renderPreparedSfcSnippet(input: RenderSfcMarkupInput): string {
@@ -259,7 +293,7 @@ function renderScript(ctx: RenderContext): string | undefined {
   // Story-file constants come first, in the order the story file declares them, since the hoisted
   // consts read them and they read each other.
   const constantsCode = Array.from(ctx.declaredConstants)
-    .map((name) => [name, ctx.constants.get(name)!] as const)
+    .map((name) => [name, ctx.constants.declarations.get(name)!] as const)
     .sort(([, a], [, b]) => a.start - b.start)
     .map(([name, constant]) => `const ${name} = ${constant.source};`);
   const variablesCode = constantsCode
@@ -382,6 +416,12 @@ export function renderBoundArgAttribute(
  * share one const per arg name and value, so every reference keeps the same identity.
  */
 export function hoistArgValue(name: string, value: Node, ctx: RenderContext): string {
+  // An arg written as the name of a constant the snippet declares needs no const of its own.
+  const constant = declaredConstantOf(value, ctx);
+  if (constant !== undefined) {
+    return constant;
+  }
+
   const source = scriptValue(name, value, ctx);
   const existing = ctx.hoistedArgs.get(name);
   if (existing && (existing.source === source || sharesWrittenConst(name, value, ctx))) {
@@ -396,10 +436,12 @@ export function hoistArgValue(name: string, value: Node, ctx: RenderContext): st
 
 // Whether a template's arg shares the const of a value a render writes, which `h()` declares
 // before any arg and no template marks; the snippet declares the two as one when they print alike.
+// An arg bound to a story-file constant shares that constant's declaration the same way.
 export function sharesWrittenConst(name: string, value: Node, ctx: RenderContext): boolean {
   return (
     ctx.mark !== undefined &&
-    ctx.hoistedArgs.get(name)?.source === printValue(unwrapExpression(value))
+    (ctx.constants.declaredAs(value) !== undefined ||
+      ctx.hoistedArgs.get(name)?.source === printValue(unwrapExpression(value)))
   );
 }
 
@@ -407,11 +449,7 @@ export function sharesWrittenConst(name: string, value: Node, ctx: RenderContext
 export function hoistModelRef(name: string, value: Node | undefined, ctx: RenderContext): string {
   (ctx.imports[VUE_PACKAGE] ??= new Set()).add('ref');
   const bindingName = allocateBindingName(name, ctx);
-  const unwrapped = value && unwrapExpression(value);
-  if (unwrapped) {
-    declareConstantsOf(unwrapped, ctx);
-  }
-  const initial = unwrapped ? printValue(unwrapped) : '';
+  const initial = value ? scriptCode(value, ctx) : '';
   ctx.variables.set(
     bindingName,
     `ref(${marked(ctx, { kind: 'value', in: 'script', arg: name }, initial)})`

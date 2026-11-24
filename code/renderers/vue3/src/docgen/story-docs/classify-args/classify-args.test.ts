@@ -208,7 +208,7 @@ function classify(
       slots: new Set(slots),
       events: new Set(events),
     },
-    new Set(declared)
+    () => new Set(declared)
   );
 
   return {

@@ -26,6 +26,8 @@ import { readForwardableSetup, type ForwardableSetup } from './forward-setup.ts'
 import {
   attributeHole,
   createRenderContext,
+  shadowedDeclarations,
+  reserveBindings,
   hoistArgValue,
   hoistModelRef,
   importStatementForBinding,
@@ -257,6 +259,12 @@ export function transformTemplate(
     return undefined;
   }
 
+  // The render names something of its own as a constant the args read, and one script cannot
+  // declare both. The caller prints again without that constant.
+  if (shadowedDeclarations(state.ctx).length > 0) {
+    return undefined;
+  }
+
   return {
     snippet: renderPreparedSfcSnippet({
       templateCode: applyEdits(template, state.edits),
@@ -267,9 +275,7 @@ export function transformTemplate(
 
 /** Reserve setup names and route forwarded imports before any hoist can collide with them. */
 function seedForwardedSetup(setup: ForwardableSetup, state: TransformState): boolean {
-  for (const name of setup.bindings) {
-    state.ctx.bindings.add(name);
-  }
+  reserveBindings(setup.bindings, state.ctx);
   for (const { localName, binding } of setup.imports) {
     if (binding.importName === localName) {
       (state.ctx.imports[binding.importId] ??= new Set()).add(localName);
@@ -892,9 +898,11 @@ function addBindingPattern(pattern: string, ctx: RenderContext): boolean {
     return false;
   }
 
+  const names = new Set<string>();
   for (const param of ast.params) {
-    addBindingNames(param, ctx.bindings);
+    addBindingNames(param, names);
   }
+  reserveBindings(names, ctx);
 
   return true;
 }

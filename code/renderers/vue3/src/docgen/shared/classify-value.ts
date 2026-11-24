@@ -72,7 +72,7 @@ const UNDEFINED_IDENTIFIER = 'undefined';
 const NO_LOCALS: ReadonlySet<string> = new Set();
 
 /** Classifies one CSF arg value into the single plan both the classifier and the renderer act on. */
-export function classifyValue(node: Node, locals: ReadonlySet<string> = NO_LOCALS): ValuePlan {
+export function classifyValue(node: Node, declared: ReadonlySet<string> = NO_LOCALS): ValuePlan {
   const value = unwrapExpression(node);
 
   if (isUndefinedIdentifier(value)) {
@@ -88,7 +88,7 @@ export function classifyValue(node: Node, locals: ReadonlySet<string> = NO_LOCAL
     return { kind: 'inline' };
   }
 
-  return isResolvable(value, locals) ? { kind: 'hoist' } : { kind: 'unrepresentable' };
+  return isResolvable(value, declared) ? { kind: 'hoist' } : { kind: 'unrepresentable' };
 }
 
 // An arg value as the snippet prints it: a boolean, string or number literal, or its code.

@@ -51,7 +51,11 @@ import {
 } from './classify-args/classify-args.ts';
 import type { ForwardableSetup } from './transform-template/forward-setup.ts';
 import { printH } from './print-h/print-h.ts';
-import { createRenderContext } from '../shared/render-primitives.ts';
+import {
+  type RenderContext,
+  createRenderContext,
+  shadowedDeclarations,
+} from '../shared/render-primitives.ts';
 import { type StoryConstants, collectStoryConstants } from '../shared/story-constants.ts';
 import type { VueHolePlace } from '../../snippet-values.ts';
 import {
@@ -117,6 +121,8 @@ type StaticStoryRenderer =
       setup?: ForwardableSetup;
     };
 type StorySnippetResult = { snippet: string };
+/** Story-file constants the render declares as something else, so the snippet cannot. */
+type ShadowedConstants = { shadowed: string[] };
 type StaticStoryArgs = {
   classified: ClassifyArgsResult;
   /** Story-file constants the arg values read, which the snippet declares along with them. */
@@ -351,47 +357,64 @@ function enrichStoryDoc(
     return withWarning(IMPORT_UNRESOLVED_WARNING);
   }
 
-  const resolved = resolveStaticStoryArgs(storyExport, docgenArgInfo, options);
-  const { classified, constants } = resolved;
-  const { args, unresolved: classifyUnresolved } = classified;
-  const unresolved = [...classifyUnresolved, ...resolved.unresolved];
-
-  // A snippet showing none of the args the story actually sets would be a worse example than the
-  // runtime one, so no snippet is emitted and the warning names everything that was dropped.
-  if (args.length === 0 && unresolved.length > 0) {
-    return withWarning(noSnippetWarning(unresolved));
+  // A constant the render declares as something else is one the snippet cannot declare, which
+  // only printing shows. The args are then read again without it, so those reading it are named.
+  const storyRenderer = renderer;
+  const taken = new Set<string>();
+  for (;;) {
+    const result = printStoryDoc(taken);
+    if (!('shadowed' in result)) {
+      return result;
+    }
+    result.shadowed.forEach((name) => taken.add(name));
   }
 
-  // The snippet, and its template: the same print with each place an arg prints marked as a hole.
-  const print = (mark?: HoleMarks<VueHolePlace>['mark']) =>
-    renderStaticStorySnippet(
-      renderer,
-      classified,
-      constants,
-      componentName,
-      docgenArgInfo,
-      options,
-      mark
-    );
-  const rendered = print();
-  if (!rendered) {
-    return withWarning(UNRENDERED_WARNINGS[renderer.kind]);
-  }
-  // The snippet holds every character the marked print does but the marks, so no code it prints
-  // is read as a mark.
-  const marks = createHoleMarks<VueHolePlace>([rendered.snippet]);
-  const printed = print(marks.mark)?.snippet;
-  const holes = printed === undefined ? undefined : marks.toTemplate(printed);
+  function printStoryDoc(taken: ReadonlySet<string>): StoryDoc | ShadowedConstants {
+    const resolved = resolveStaticStoryArgs(storyExport, docgenArgInfo, options, taken);
+    const { classified, constants } = resolved;
+    const { args, unresolved: classifyUnresolved } = classified;
+    const unresolved = [...classifyUnresolved, ...resolved.unresolved];
 
-  return {
-    ...storyDoc,
-    snippet: rendered.snippet,
-    // An attribute a control clears leaves no gap.
-    ...(holes && {
-      template: withHoleSpace(laidOut(holes), (hole) => hole.kind === 'attr'),
-    }),
-    ...(unresolved.length > 0 ? { warning: unresolvedWarning(unresolved) } : {}),
-  };
+    // A snippet showing none of the args the story actually sets would be a worse example than the
+    // runtime one, so no snippet is emitted and the warning names everything that was dropped.
+    if (args.length === 0 && unresolved.length > 0) {
+      return withWarning(noSnippetWarning(unresolved));
+    }
+
+    // The snippet, and its template: the same print with each place an arg prints marked as a hole.
+    const print = (mark?: HoleMarks<VueHolePlace>['mark']) =>
+      renderStaticStorySnippet(
+        storyRenderer,
+        classified,
+        constants,
+        componentName,
+        docgenArgInfo,
+        options,
+        mark
+      );
+    const rendered = print();
+    if (!rendered) {
+      return withWarning(UNRENDERED_WARNINGS[storyRenderer.kind]);
+    }
+    if ('shadowed' in rendered) {
+      return rendered;
+    }
+    // The snippet holds every character the marked print does but the marks, so no code it prints
+    // is read as a mark.
+    const marks = createHoleMarks<VueHolePlace>([rendered.snippet]);
+    const marked = print(marks.mark);
+    const holes = marked && 'snippet' in marked ? marks.toTemplate(marked.snippet) : undefined;
+
+    return {
+      ...storyDoc,
+      snippet: rendered.snippet,
+      // An attribute a control clears leaves no gap.
+      ...(holes && {
+        template: withHoleSpace(laidOut(holes), (hole) => hole.kind === 'attr'),
+      }),
+      ...(unresolved.length > 0 ? { warning: unresolvedWarning(unresolved) } : {}),
+    };
+  }
 }
 
 // The template with each hole laid out on its line. A hole that prints nothing on a line of its
@@ -469,17 +492,19 @@ function staticRendererForRenderFunction(
 function resolveStaticStoryArgs(
   storyExport: string,
   docgenArgInfo: VueDocgenArgInfo,
-  options: StoryDocsContext
+  options: StoryDocsContext,
+  taken: ReadonlySet<string>
 ): StaticStoryArgs {
   // A name another module owns stays as written, for the classifier to report.
   const resolved = options.resolver.resolve(storyExport);
   // A value that reads a constant of the story file, as `lines.length` does, keeps reading it: the
   // snippet declares the constant too, so the name is no longer one it cannot account for.
-  const constants = collectStoryConstants(resolved.args, options.resolver.ctx);
+  const constants = collectStoryConstants(resolved.args, options.resolver.ctx, taken);
   return {
-    classified: classifyArgs(resolved.args, docgenArgInfo, new Set(constants.keys())),
+    classified: classifyArgs(resolved.args, docgenArgInfo, constants.readBy),
     constants,
-    unresolved: resolved.unresolved.filter((source) => !constants.has(source)),
+    // The resolver reports each name of the story file a value reads, by that name alone.
+    unresolved: resolved.unresolved.filter((source) => !constants.names.has(source)),
   };
 }
 
@@ -491,10 +516,30 @@ function renderStaticStorySnippet(
   docgenArgInfo: VueDocgenArgInfo,
   options: StoryDocsContext,
   mark: HoleMarks<VueHolePlace>['mark'] | undefined
+): StorySnippetResult | ShadowedConstants | undefined {
+  const ctx = createRenderContext(mark, constants);
+  const rendered = renderWithContext(
+    renderer,
+    classified,
+    ctx,
+    componentName,
+    docgenArgInfo,
+    options
+  );
+  const shadowed = rendered ? [] : shadowedDeclarations(ctx);
+  return shadowed.length > 0 ? { shadowed } : rendered;
+}
+
+function renderWithContext(
+  renderer: Exclude<StaticStoryRenderer, { kind: 'bail' }>,
+  classified: ClassifyArgsResult,
+  ctx: RenderContext,
+  componentName: string,
+  docgenArgInfo: VueDocgenArgInfo,
+  options: StoryDocsContext
 ): StorySnippetResult | undefined {
   const componentImportStatement = options.snippet?.componentImportStatement;
   const { args } = classified;
-  const ctx = createRenderContext(mark, constants);
   const slots = docgenArgInfo.slots;
 
   // A story without a render function shows the component receiving the args directly.

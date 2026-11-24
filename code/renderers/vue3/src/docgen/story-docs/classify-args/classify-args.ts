@@ -97,20 +97,20 @@ export interface ClassifyArgsResult {
  *
  * Function args matching a declared event render as listeners, and declared function props hoist.
  *
- * `declared` names the story-file constants the snippet declares itself, so a value reading one is
- * hoisted next to it instead of being reported.
+ * `declaredFor` names the story-file constants the snippet declares for a value, so a value reading
+ * one is hoisted next to it instead of being reported.
  */
 export function classifyArgs(
   args: Record<string, Node>,
   docgen: VueDocgenArgInfo,
-  declared?: ReadonlySet<string>
+  declaredFor?: (value: Node) => ReadonlySet<string>
 ): ClassifyArgsResult {
   const classified: ClassifiedArg[] = [];
   const unset = new Set<string>();
   const unresolved: string[] = [];
 
   for (const [name, value] of Object.entries(args)) {
-    const result = classifyArg(name, value, docgen, declared);
+    const result = classifyArg(name, value, docgen, declaredFor?.(value));
 
     if (result.kind === 'classified') {
       classified.push(result.arg);
