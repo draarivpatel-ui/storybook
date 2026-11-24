@@ -51,6 +51,28 @@ const writeStoryDocs = (components: Record<string, unknown>) =>
   );
 
 describe('summarizeStoryDocs', () => {
+  it('counts a story left out of the manifests by its snippet outcome', async () => {
+    vol.fromJSON({
+      [join(outputDir, 'services/core/story-docs/button.json')]: JSON.stringify({
+        components: {
+          button: { id: 'button', name: 'Button', path: './src/button.stories.tsx', stories: {} },
+        },
+        nonManifestStories: {
+          button: {
+            'button--dark': { id: 'button--dark', name: 'Dark', snippet: '<Button dark />' },
+          },
+        },
+      }),
+    });
+
+    await expect(summarizeStoryDocs(toIndex([story('button--dark')]), outputDir)).resolves.toEqual({
+      storyCount: 1,
+      errorCount: 0,
+      noSnippetCount: 0,
+      warningCount: 0,
+    });
+  });
+
   beforeEach(async () => {
     vol.reset();
     const memfs = await vi.importActual<typeof import('memfs')>('memfs');
