@@ -43,7 +43,6 @@ export function subscribeDocgenToModuleGraphChanges(options: {
 }) {
   subscribeExtractionServiceToModuleGraphChanges(docgenServiceDef, {
     ...options,
-    queryName: 'docgen',
     allQueryName: 'docgenForAllComponents',
     extractCommand: 'extractDocgen',
   });
