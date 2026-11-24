@@ -26,26 +26,18 @@ export async function extractFragmentNodes(params: Params): Promise<Result> {
   const { fragment, moduleNodes } = params;
   const { storyNames } = moduleNodes;
 
-  let latestComment: SvelteAST.Comment | undefined;
-
   const state: Result = {
     storyComponents: [],
     snippetBlocks: [],
   };
 
   const visitors: Visitors<SvelteAST.SvelteNode, typeof state> = {
-    Comment(node, { next }) {
-      latestComment = node;
-      next();
-    },
-
-    Component(node, { state }) {
+    Component(node, { state, path }) {
       if (storyNames.includes(node.name)) {
         state.storyComponents.push({
-          comment: latestComment,
+          comment: commentBefore(node, path.at(-1)),
           component: node,
         });
-        latestComment = undefined;
       }
     },
 
@@ -57,4 +49,18 @@ export async function extractFragmentNodes(params: Params): Promise<Result> {
   walk(fragment, state, visitors);
 
   return state;
+}
+
+// The comment that a story directly follows, with only whitespace between them.
+function commentBefore(
+  node: SvelteAST.Component,
+  parent: SvelteAST.SvelteNode | undefined
+): SvelteAST.Comment | undefined {
+  if (parent?.type !== 'Fragment') return undefined;
+  for (let index = parent.nodes.indexOf(node) - 1; index >= 0; index--) {
+    const sibling = parent.nodes[index];
+    if (sibling.type === 'Comment') return sibling;
+    if (sibling.type !== 'Text' || sibling.data.trim()) return undefined;
+  }
+  return undefined;
 }
