@@ -1,22 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
-
-import { global } from '@storybook/global';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getSelectionSpecifierFromPath, pathToId, setPath } from './UrlStore.ts';
 
-const { history, document } = global;
-
-vi.mock('@storybook/global', () => ({
-  global: {
-    history: { replaceState: vi.fn() },
-    document: {
-      location: {
-        pathname: 'pathname',
-        search: '',
-      },
-    },
+const history = { replaceState: vi.fn() };
+const document = {
+  location: {
+    pathname: 'pathname',
+    search: '',
+    hash: '',
   },
-}));
+  title: '',
+};
+
+beforeEach(() => {
+  document.location.pathname = 'pathname';
+  document.location.search = '';
+  document.location.hash = '';
+  document.title = '';
+  vi.stubGlobal('history', history);
+  vi.stubGlobal('document', document);
+  vi.stubGlobal('location', document.location);
+});
 
 describe('UrlStore', () => {
   describe('pathToId', () => {
