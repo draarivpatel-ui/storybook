@@ -103,6 +103,12 @@ Similarly, you can provide descriptions (and summaries) for each story, which se
 The agent sees the first three stories with a code snippet in full, or every story with a snippet if no component API details were extracted.
 For each other story, it receives the summary, if present, or the first 90 characters of the description.
 
+<If renderer="svelte">
+
+In a Svelte CSF file, write the description and the `@summary` tag in the HTML comment above the `<Story>`.
+
+</If>
+
 <CodeSnippets path="story-description-and-summary.md" />
 
 <If renderer="react">
