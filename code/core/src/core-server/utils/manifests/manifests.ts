@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { selectComponentEntriesByComponentId } from 'storybook/internal/common';
+import { isManifestEntry, selectComponentEntriesByComponentId } from 'storybook/internal/common';
 import { logger } from 'storybook/internal/node-logger';
 import type { Manifests, Presets } from 'storybook/internal/types';
 
@@ -9,12 +9,12 @@ import type { Polka } from 'polka';
 import invariant from 'tiny-invariant';
 
 import { getService } from '../../../shared/open-service/server.ts';
-import { Tag } from '../../../shared/constants/tags.ts';
 import type { ComponentsManifest } from '../../../types/modules/core-common.ts';
 import { getOwn } from '../../../shared/open-service/plain-object.ts';
 import { readAllComponents } from '../../../shared/open-service/services/component-state-key.ts';
 import type { DocgenPayload } from '../../../shared/open-service/services/docgen/types.ts';
 import type { StoryDocsPayload } from '../../../shared/open-service/services/story-docs/types.ts';
+import { readStoryDocs } from '../../../shared/open-service/services/story-docs/definition.ts';
 import {
   buildComponentsRefManifest,
   type ComponentManifestWithStoryDocs,
@@ -113,9 +113,7 @@ async function getManifestEntries(presets: Presets) {
   const generator = await presets.apply('storyIndexGenerator');
   invariant(generator, 'storyIndexGenerator must be configured');
   const index = await generator.getIndex();
-  return Object.values(index.entries).filter(
-    (entry) => entry.tags?.includes(Tag.MANIFEST) ?? false
-  );
+  return Object.values(index.entries).filter(isManifestEntry);
 }
 
 type ManifestEntries = Awaited<ReturnType<typeof getManifestEntries>>;
@@ -186,6 +184,20 @@ function withDocsOnlyComponents(
   return next;
 }
 
+// The story docs the manifests show, read by the same rule as a build's snapshot reader: a
+// component with no manifest stories gets none, so no import either.
+function readManifestStoryDocs(
+  components: Record<string, StoryDocsPayload>,
+  componentIds: string[]
+): Record<string, StoryDocsPayload> {
+  return Object.fromEntries(
+    componentIds.flatMap((id) => {
+      const payload = readStoryDocs({ components, nonManifestStories: {} }, id, 'manifest');
+      return payload ? [[id, payload] as const] : [];
+    })
+  );
+}
+
 /**
  * Renders the components HTML debugger from the live docgen, story-docs, and MDX services (dev
  * only).
@@ -210,7 +222,7 @@ async function renderComponentsHtmlFromService(
   const components = withDocsOnlyComponents(
     mergeServicePayloads(
       readAllComponents(allDocgenPayloads),
-      readAllComponents(allStoryDocsPayloads),
+      readManifestStoryDocs(allStoryDocsPayloads, manifestComponentIds),
       manifestComponentIds
     ),
     manifestComponentIds,
@@ -270,7 +282,7 @@ async function writeDocgenServerManifests(
   const startTime = performance.now();
   const [docgenPayloads, storyDocsPayloads] = await Promise.all([
     loadDocgenPayloadsFromDisk(outputDir, manifestComponentIds),
-    loadStoryDocsPayloadsFromDisk(outputDir, manifestComponentIds),
+    loadStoryDocsPayloadsFromDisk(outputDir, manifestComponentIds, 'manifest'),
   ]);
   const durationMs = Math.round(performance.now() - startTime);
   const docsByComponentId = getAttachedDocsByComponent(manifests.components);
